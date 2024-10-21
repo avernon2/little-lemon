@@ -4,7 +4,6 @@ import { HTMLAttributes } from "react";
 export const Container = styled.div<HTMLAttributes<HTMLDivElement>>`
   width: 70%;
   height: 100vh;
-  min-height: 59rem;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -12,13 +11,14 @@ export const Container = styled.div<HTMLAttributes<HTMLDivElement>>`
   gap: 4.3rem;
   padding-top: 4rem;
   padding-bottom: 2rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
   background-color: rgba(251, 218, 187, .3); 
 
   ::before {
     content: '';
     width: 100%;
     height: 100vh;
-    min-height: 59rem;
     margin-bottom: -4rem;
     position: absolute;
 

@@ -29,6 +29,7 @@ export const Customer = styled.span`
   align-items: center;
   gap: 1rem;
 
+
   img {
     width: 5rem;
     height: 5rem;
