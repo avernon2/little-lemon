@@ -1,0 +1,264 @@
+import React, { useMemo, useState, useCallback } from 'react';
+import {
+    Autocomplete,
+    Box,
+    Paper,
+    Table,
+    TableBody,
+    TableCell,
+    TableContainer,
+    TableHead,
+    TableRow,
+    TextField,
+    MenuItem,
+    TablePagination,
+    Select,
+    FormControl,
+    InputLabel,
+    SelectChangeEvent
+} from '@mui/material';
+import debounce from 'lodash.debounce';
+
+type AggregateType = 'sum' | 'average' | 'count';
+
+interface DataItem {
+    [key: string]: number | string;
+}
+
+interface Column {
+    key: string;
+    label: string;
+}
+
+interface PivotTableProps<T extends DataItem> {
+    data: T[];
+    defaultColumns?: Column[];
+    aggregate?: AggregateType;
+}
+
+const PivotTable = <T extends DataItem>({
+    data,
+    defaultColumns = [],
+    aggregate = 'count'
+}: PivotTableProps<T>) => {
+    const [columns, setColumns] = useState<Column[]>(defaultColumns);
+    const [selectedFilters, setSelectedFilters] = useState<{ [key: string]: string[] }>({});
+    const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | null } | null>(null);
+    const [page, setPage] = useState(0);
+    const [rowsPerPage, setRowsPerPage] = useState(5);
+    const [selectedAggregate, setSelectedAggregate] = useState<AggregateType>(aggregate);
+
+    const availableColumns = useMemo(() => {
+        if (data.length === 0) return [];
+        return Object.keys(data[0]).map(key => ({ key, label: key }));
+    }, [data]);
+
+    const calculateAggregateValue = useCallback((items: T[], valueCol: Column): number => {
+        switch (selectedAggregate) {
+            case 'average': {
+                const sum = items.reduce((acc, item) => acc + (Number(item[valueCol.key]) || 0), 0);
+                return items.length > 0 ? sum / items.length : 0;
+            }
+            case 'count':
+                return items.length;
+            case 'sum':
+            default:
+                return items.reduce((acc, item) => acc + (Number(item[valueCol.key]) || 0), 0);
+        }
+    }, [selectedAggregate]);
+
+    const pivotData = useMemo(() => {
+        if (columns.length === 0) return [];
+
+        const groupedData: { [key: string]: T[] } = {};
+
+        data.forEach((item) => {
+            const rowKey = columns.map(col => String(item[col.key])).join('-');
+            groupedData[rowKey] = groupedData[rowKey] || [];
+            groupedData[rowKey].push(item);
+        });
+
+        return Object.entries(groupedData).map(([rowKey, items]) => {
+            const result: DataItem = {};
+
+            // Set row values
+            rowKey.split('-').forEach((value, index) => {
+                result[columns[index].key] = value;
+            });
+
+            // Calculate aggregate
+            result['Total'] = calculateAggregateValue(items, { key: 'Revenue', label: 'Revenue' });
+
+            return result;
+        });
+    }, [data, columns, calculateAggregateValue]);
+
+    const formatValue = useCallback((value: number | string): string => {
+        if (typeof value === 'number') {
+            return value.toString();
+        }
+        return String(value);
+    }, []);
+
+    const sortedAndFilteredData = useMemo(() => {
+        let result = [...pivotData];
+
+        // Apply sorting
+        if (sortConfig && sortConfig.direction !== null) {
+            result.sort((a, b) => {
+                const aVal = a[sortConfig.key];
+                const bVal = b[sortConfig.key];
+                const multiplier = sortConfig.direction === 'asc' ? 1 : -1;
+                return aVal < bVal ? -multiplier : aVal > bVal ? multiplier : 0;
+            });
+        }
+
+        // Apply filters
+        if (Object.keys(selectedFilters).length > 0) {
+            result = result.filter(item => {
+                return Object.entries(selectedFilters).every(([column, selectedValues]) => {
+                    if (selectedValues.length === 0) return true;
+                    return selectedValues.includes(String(item[column]));
+                });
+            });
+        }
+
+        return result;
+    }, [pivotData, sortConfig, selectedFilters]);
+
+    const grandTotal = useMemo(() => {
+        return calculateAggregateValue(sortedAndFilteredData as T[], { key: 'Total', label: 'Total' });
+    }, [sortedAndFilteredData, calculateAggregateValue]);
+
+    const handleFilterChange = useCallback(debounce((key: string, newValue: string[]) => {
+        setSelectedFilters(prev => ({
+            ...prev,
+            [key]: newValue
+        }));
+    }, 300), []);
+
+    const handleSort = useCallback((key: string) => {
+        setSortConfig(prevSortConfig => {
+            if (prevSortConfig?.key === key) {
+                return {
+                    key,
+                    direction: prevSortConfig.direction === 'asc' ? 'desc' : prevSortConfig.direction === 'desc' ? null : 'asc'
+                };
+            }
+            return { key, direction: 'asc' };
+        });
+    }, []);
+
+    const handleChangePage = useCallback((_: unknown, newPage: number) => {
+        setPage(newPage);
+    }, []);
+
+    const handleChangeRowsPerPage = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+        setRowsPerPage(parseInt(event.target.value, 10));
+        setPage(0);
+    }, []);
+
+    const handleAggregateChange = useCallback((event: SelectChangeEvent<AggregateType>) => {
+        setSelectedAggregate(event.target.value as AggregateType);
+    }, []);
+
+    return (
+        <Box sx={{ display: 'flex' }}>
+            <Box sx={{ width: 250, padding: 2 }}>
+                <Autocomplete
+                    multiple
+                    options={availableColumns}
+                    getOptionLabel={option => option.label}
+                    value={columns}
+                    onChange={(_, newValue) => setColumns(newValue)}
+                    renderInput={params => <TextField {...params} label="Columns" />}
+                />
+                <FormControl fullWidth sx={{ mt: 2 }}>
+                    <InputLabel>Aggregate</InputLabel>
+                    <Select
+                        value={selectedAggregate}
+                        onChange={handleAggregateChange}
+                        label="Aggregate"
+                    >
+                        <MenuItem value="sum">Sum</MenuItem>
+                        <MenuItem value="average">Average</MenuItem>
+                        <MenuItem value="count">Count</MenuItem>
+                    </Select>
+                </FormControl>
+            </Box>
+
+            <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
+                <TableContainer component={Paper}>
+                    <Table stickyHeader>
+                        <TableHead>
+                            <TableRow>
+                                {columns.map(column => (
+                                    <TableCell
+                                        key={column.key}
+                                        onClick={() => handleSort(column.key)}
+                                    >
+                                        {column.label}
+                                        {sortConfig?.key === column.key ? (sortConfig.direction === 'asc' ? ' 🔼' : sortConfig.direction === 'desc' ? ' 🔽' : '') : ''}
+                                    </TableCell>
+                                ))}
+                                <TableCell key="Total">Total</TableCell>
+                            </TableRow>
+                            <TableRow>
+                                {columns.map(col => (
+                                    <TableCell key={col.key}>
+                                        <Autocomplete
+                                            multiple
+                                            size="small"
+                                            options={Array.from(new Set(data.map(item =>
+                                                String(item[col.key])))).sort()}
+                                            value={selectedFilters[col.key] || []}
+                                            onChange={(_, newValue) => handleFilterChange(col.key, newValue)}
+                                            renderInput={params => <TextField {...params} />}
+                                        />
+                                    </TableCell>
+                                ))}
+                                <TableCell key="Total"></TableCell>
+                            </TableRow>
+                        </TableHead>
+                        <TableBody>
+                            {sortedAndFilteredData.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((row, index) => (
+                                <TableRow key={index}>
+                                    {columns.map(column => (
+                                        <TableCell key={column.key}>
+                                            {formatValue(row[column.key])}
+                                        </TableCell>
+                                    ))}
+                                    <TableCell key="Total">
+                                        {formatValue(row['Total'])}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                            <TableRow>
+                                <TableCell
+                                    colSpan={columns.length}
+                                    sx={{ fontWeight: 'bold' }}
+                                >
+                                    Grand Total
+                                </TableCell>
+                                <TableCell key="grandTotal" sx={{ fontWeight: 'bold' }}>
+                                    {formatValue(grandTotal)}
+                                </TableCell>
+                            </TableRow>
+                        </TableBody>
+                    </Table>
+                    <TablePagination
+                        rowsPerPageOptions={[5, 10, 25]}
+                        component="div"
+                        count={sortedAndFilteredData.length}
+                        rowsPerPage={rowsPerPage}
+                        page={page}
+                        onPageChange={handleChangePage}
+                        onRowsPerPageChange={handleChangeRowsPerPage}
+                    />
+                </TableContainer>
+            </Box>
+        </Box>
+    );
+};
+
+export default React.memo(PivotTable);
