@@ -1,227 +1,387 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState } from "react";
 import {
-    Autocomplete,
-    Box,
-    TextField,
-    MenuItem,
-    Select,
-    FormControl,
-    InputLabel,
-    SelectChangeEvent,
-    Typography
-} from '@mui/material';
-import { DataGrid, GridColDef, GridSortModel, GridPaginationModel } from '@mui/x-data-grid';
+  DndContext,
+  useSensor,
+  PointerSensor,
+  DragEndEvent,
+  closestCenter,
+} from "@dnd-kit/core";
+import {
+  useSortable,
+  SortableContext,
+  arrayMove,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
-type AggregateType = 'sum' | 'average' | 'count';
+import {
+  Box,
+  Paper,
+  Typography,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+} from "@mui/material";
 
-interface DataItem {
-    [key: string]: number | string;
+import {
+  DataGrid,
+  GridColDef,
+  GridToolbar
+} from "@mui/x-data-grid";
+
+/**********************************************
+ * ColumnItem: each column with container
+ **********************************************/
+interface ColumnItem {
+  id: string;
+  name: string;
+  container: "available" | "active";
 }
 
-interface Column {
-    key: string;
-    label: string;
+/**********************************************
+ * Aggregation type
+ **********************************************/
+type Aggregation = "count" | "sum" | "average";
+
+/**********************************************
+ * Props for the pivot table
+ **********************************************/
+interface PivotTableProps {
+  /** Data rows. */
+  data: Record<string, any>[];
+  /**
+   * A string array of column IDs that should be in **Active** columns by default.
+   * Any other columns from `data[0]` automatically go into **Available** columns.
+   */
+  defaultColumns?: string[];
 }
 
-interface PivotTableProps<T extends DataItem> {
-    data: T[];
-    defaultColumns?: Column[];
-    aggregate?: AggregateType;
-    heading?: string; // Add heading prop
-}
+/**********************************************
+ * SortableItem: single draggable column
+ **********************************************/
+const SortableItem: React.FC<{ id: string; name: string }> = ({ id, name }) => {
+  const { attributes, listeners, setNodeRef, transform, transition } =
+    useSortable({ id });
 
-const PivotTable = <T extends DataItem>({
-    data,
-    defaultColumns = [],
-    aggregate = 'count',
-    heading // Destructure heading prop
-}: PivotTableProps<T>) => {
-    const [columns, setColumns] = useState<Column[]>(defaultColumns);
-    const [sortModel, setSortModel] = useState<GridSortModel>([]);
-    const [page, setPage] = useState(0);
-    const [pageSize, setPageSize] = useState(100);
-    const [selectedAggregate, setSelectedAggregate] = useState<AggregateType>(aggregate);
-
-    const availableColumns = useMemo(() => {
-        if (data.length === 0) return [];
-        return Object.keys(data[0]).map(key => ({ key, label: key }));
-    }, [data]);
-
-    const calculateAggregateValue = useCallback((items: T[], valueCol: Column): number => {
-        switch (selectedAggregate) {
-            case 'average': {
-                const sum = items.reduce((acc, item) => acc + (Number(item[valueCol.key]) || 0), 0);
-                return items.length > 0 ? sum / items.length : 0;
-            }
-            case 'count':
-                return items.length;
-            case 'sum':
-            default:
-                return items.reduce((acc, item) => acc + (Number(item[valueCol.key]) || 0), 0);
-        }
-    }, [selectedAggregate]);
-
-    const pivotData = useMemo(() => {
-        if (columns.length === 0) return [];
-
-        const groupedData: { [key: string]: T[] } = {};
-
-        data.forEach((item) => {
-            const rowKey = columns.map(col => String(item[col.key])).join('-');
-            groupedData[rowKey] = groupedData[rowKey] || [];
-            groupedData[rowKey].push(item);
-        });
-
-        return Object.entries(groupedData).map(([rowKey, items], index) => {
-            const result: DataItem = { id: index };
-
-            // Set row values
-            rowKey.split('-').forEach((value, index) => {
-                result[columns[index].key] = value;
-            });
-
-            // Calculate aggregate
-            result['Total'] = calculateAggregateValue(items, { key: 'Revenue', label: 'Revenue' });
-
-            return result;
-        });
-    }, [data, columns, calculateAggregateValue]);
-
-    const sortedAndFilteredData = useMemo(() => {
-        const result = [...pivotData];
-
-        // Apply sorting
-        if (sortModel.length > 0) {
-            const { field, sort } = sortModel[0];
-            result.sort((a, b) => {
-                const aVal = a[field];
-                const bVal = b[field];
-                const multiplier = sort === 'asc' ? 1 : -1;
-                return aVal < bVal ? -multiplier : aVal > bVal ? multiplier : 0;
-            });
-        }
-
-        return result;
-    }, [pivotData, sortModel]);
-
-    const handleSortModelChange = useCallback((model: GridSortModel) => {
-        setSortModel(model);
-    }, []);
-
-    const handlePaginationModelChange = useCallback((params: GridPaginationModel) => {
-        setPage(params.page);
-        setPageSize(params.pageSize);
-    }, []);
-
-    const handleAggregateChange = useCallback((event: SelectChangeEvent<AggregateType>) => {
-        setSelectedAggregate(event.target.value as AggregateType);
-    }, []);
-
-    const gridColumns: GridColDef[] = useMemo(() => {
-        return [
-            ...columns.map(col => ({
-                field: col.key,
-                headerName: col.label,
-                flex: 1,
-                sortable: true,
-                filterable: true,
-            })),
-            {
-                field: 'Total',
-                headerName: 'Total',
-                flex: 1,
-                sortable: true,
-                filterable: true,
-            }
-        ];
-    }, [columns]);
-
-    const grandTotal = useMemo(() => {
-        const total: DataItem = { id: 'grand-total', 'Grand Total': 'Grand Total' };
-        columns.forEach(col => {
-            total[col.key] = pivotData.reduce((acc, item) => acc + (Number(item[col.key]) || 0), 0);
-        });
-        total['Total'] = pivotData.reduce((acc, item) => acc + (Number(item['Total']) || 0), 0);
-        return total;
-    }, [pivotData, columns]);
-
-    const rowsWithGrandTotal = useMemo(() => {
-        return [...sortedAndFilteredData, grandTotal];
-    }, [sortedAndFilteredData, grandTotal]);
-
-    return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {heading && (
-                <Typography variant="h6" component="h2">
-                    {heading}
-                </Typography>
-            )}
-            <Box sx={{ display: 'flex', gap: 2, flexGrow: 1 }}>
-                <FormControl size="small" sx={{ flex: 1 }}>
-                    <InputLabel>Aggregate</InputLabel>
-                    <Select
-                        value={selectedAggregate}
-                        onChange={handleAggregateChange}
-                        label="Aggregate"
-                    >
-                        <MenuItem value="sum">Sum</MenuItem>
-                        <MenuItem value="average">Average</MenuItem>
-                        <MenuItem value="count">Count</MenuItem>
-                    </Select>
-                </FormControl>
-                <Autocomplete
-                    multiple
-                    options={availableColumns}
-                    getOptionLabel={option => option.label}
-                    value={columns}
-                    onChange={(_, newValue) => {
-                        const uniqueColumns = newValue.filter((col, index, self) =>
-                            index === self.findIndex((c) => c.key === col.key)
-                        );
-                        setColumns(uniqueColumns);
-                    }}
-                    size="small"
-                    renderInput={params => <TextField {...params} label="Columns" />}
-                    sx={{ flex: 12 }}
-                />
-            </Box>
-
-            <Box sx={{ flexGrow: 1, height: 600 }}>
-                <DataGrid
-                    rows={rowsWithGrandTotal}
-                    columns={gridColumns}
-                    pagination
-                    pageSizeOptions={[100, 500, 1000]}
-                    rowCount={sortedAndFilteredData.length}
-                    paginationMode="server"
-                    paginationModel={{ page, pageSize }}
-                    onPaginationModelChange={handlePaginationModelChange}
-                    sortingMode="server"
-                    sortModel={sortModel}
-                    onSortModelChange={handleSortModelChange}
-                    getRowId={(row) => row.id}
-                    disableRowSelectionOnClick
-                    density="compact"
-                    initialState={{
-                        columns: {
-                            columnVisibilityModel: {
-                                Total: true,
-                            },
-                        },
-                    }}
-                    sx={{
-                        '& .MuiDataGrid-row': {
-                            '&.grand-total-row': {
-                                fontWeight: 'bold',
-                                backgroundColor: '#f0f0f0',
-                            },
-                        },
-                    }}
-                    getRowClassName={(params) => params.id === 'grand-total' ? 'grand-total-row' : ''}
-                />
-            </Box>
-        </Box>
-    );
+  return (
+    <Box
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+      p={2}
+      mb={1}
+      bgcolor="white"
+      border={1}
+      borderRadius={1}
+      boxShadow={1}
+      sx={{
+        cursor: "grab",
+        "&:hover": { bgcolor: "grey.100" },
+      }}
+      {...attributes}
+      {...listeners}
+    >
+      {name}
+    </Box>
+  );
 };
 
-export default React.memo(PivotTable);
+/**********************************************
+ * ColumnList: displays columns for a container
+ **********************************************/
+const ColumnList: React.FC<{
+  title: string;
+  items: ColumnItem[];
+}> = ({ title, items }) => {
+  return (
+    <Paper sx={{ width: 220, p: 2, bgcolor: "grey.100", flexShrink: 0 }}>
+      <Typography variant="h6" gutterBottom>
+        {title}
+      </Typography>
+      {items.map((col) => (
+        <SortableItem key={col.id} id={col.id} name={col.name} />
+      ))}
+    </Paper>
+  );
+};
+
+/**********************************************
+ * PivotTable component using DataGrid + filtering
+ **********************************************/
+const PivotTable: React.FC<PivotTableProps> = ({
+  data = [],
+  defaultColumns = [],
+}) => {
+  // 1) aggregator, default is "count"
+  const [aggregator, setAggregator] = useState<Aggregation>("count");
+
+  // 2) build column items from data keys
+  //    if key is in defaultColumns => container = 'active'
+  //    else => 'available'
+  const [columns, setColumns] = useState<ColumnItem[]>(() => {
+    const allKeys = Object.keys(data[0] || {});
+    return allKeys.map((key) => ({
+      id: key,
+      name: key,
+      container: defaultColumns.includes(key) ? "active" : "available",
+    }));
+  });
+
+  // dnd kit sensor
+  const sensor = useSensor(PointerSensor);
+
+  // find container of item
+  const findContainer = (itemId: string): "available" | "active" | undefined => {
+    return columns.find((c) => c.id === itemId)?.container;
+  };
+
+  // returns array of IDs for a container
+  const getContainerIDs = (container: "available" | "active") =>
+    columns.filter((c) => c.container === container).map((c) => c.id);
+
+  // handle drag end
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over) return;
+
+    const oldContainer = findContainer(active.id);
+    const newContainer = findContainer(over.id);
+    if (!oldContainer || !newContainer) return;
+
+    // same container => reorder
+    if (oldContainer === newContainer) {
+      const subsetIds = getContainerIDs(oldContainer);
+      const oldIndex = subsetIds.indexOf(active.id);
+      const newIndex = subsetIds.indexOf(over.id);
+
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        setColumns((prev) => {
+          const same = prev.filter((p) => p.container === oldContainer);
+          const reordered = arrayMove(same, oldIndex, newIndex);
+          const other = prev.filter((p) => p.container !== oldContainer);
+          return oldContainer === "available"
+            ? [...reordered, ...other]
+            : [...other, ...reordered];
+        });
+      }
+    } else {
+      // different container => switch container
+      setColumns((prev) => {
+        const updated = [...prev];
+        const idx = updated.findIndex((c) => c.id === active.id);
+        if (idx === -1) return prev;
+
+        updated[idx] = { ...updated[idx], container: newContainer };
+
+        // reorder in new container by 'over'
+        const newSubset = getContainerIDs(newContainer);
+        const overIndex = newSubset.indexOf(over.id);
+        const oldIndex = newSubset.indexOf(active.id);
+
+        if (overIndex !== -1 && oldIndex !== -1 && overIndex !== oldIndex) {
+          const cItems = updated.filter((u) => u.container === newContainer);
+          const reordered = arrayMove(cItems, oldIndex, overIndex);
+          const other = updated.filter((u) => u.container !== newContainer);
+
+          return newContainer === "available"
+            ? [...reordered, ...other]
+            : [...other, ...reordered];
+        }
+
+        return updated;
+      });
+    }
+  };
+
+  // 4) separate columns by container
+  const availableCols = columns.filter((c) => c.container === "available");
+  const activeCols = columns.filter((c) => c.container === "active");
+
+  /*************************************************
+   * aggregator logic for each row => "Total" column
+   *************************************************/
+  const tableData = useMemo(() => {
+    if (!data.length) return [];
+
+    const activeIDs = activeCols.map((c) => c.id);
+    // find numeric columns among active
+    const numericCols = activeIDs.filter((id) =>
+      data.some((row) => typeof row[id] === "number")
+    );
+
+    const aggregatorFunctions = {
+      count: (vals: any[]) => vals.length,
+      sum: (vals: any[]) =>
+        vals.reduce((acc, v) => acc + (Number(v) || 0), 0),
+      average: (vals: any[]) => {
+        if (!vals.length) return 0;
+        const s = vals.reduce((acc, v) => acc + (Number(v) || 0), 0);
+        return s / vals.length;
+      },
+    };
+
+    // create a new array of row objects
+    // each row must have an 'id' for DataGrid
+    // aggregator logic -> out["Total"]
+    return data.map((row, idx) => {
+      const out: Record<string, any> = {
+        id: idx, // DataGrid requires a unique 'id'
+      };
+
+      activeIDs.forEach((id) => {
+        out[id] = row[id] !== undefined ? row[id] : "-";
+      });
+
+      if (numericCols.length) {
+        const values = numericCols.map((id) => out[id]);
+        if (aggregator === "count") {
+          out["Total"] = values.length;
+        } else if (aggregator === "sum") {
+          out["Total"] = values.reduce(
+            (acc: number, v: any) => acc + (typeof v === "number" ? v : 0),
+            0
+          );
+        } else {
+          // average
+          const validVals = values.filter((v: any) => typeof v === "number");
+          if (validVals.length > 0) {
+            out["Total"] =
+              validVals.reduce((acc: number, v: number) => acc + v, 0) /
+              validVals.length;
+          } else {
+            out["Total"] = 0;
+          }
+        }
+      } else {
+        out["Total"] = "-";
+      }
+
+      return out;
+    });
+  }, [data, activeCols, aggregator]);
+
+  /*********************************************
+   * Build DataGrid columns from activeCols + Total
+   *********************************************/
+  const dataGridColumns = useMemo(() => {
+    const cols: GridColDef[] = activeCols.map((col) => ({
+      field: col.id,
+      headerName: col.name,
+      flex: 1,
+    }));
+
+    // add the "Total" column
+    cols.push({
+      field: "Total",
+      headerName: "Total",
+      flex: 1,
+      // format if numeric
+      valueFormatter: (params) => {
+        const val = params.value;
+        if (typeof val === "number") {
+          return val.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          });
+        }
+        return val;
+      },
+    });
+
+    return cols;
+  }, [activeCols]);
+
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      {/* aggregator above columns */}
+      <Box sx={{ p: 2, borderBottom: 1, borderColor: "grey.300" }}>
+        <FormControl size="small">
+          <InputLabel>Aggregator</InputLabel>
+          <Select
+            label="Aggregator"
+            value={aggregator}
+            onChange={(e) => setAggregator(e.target.value as Aggregation)}
+            sx={{ width: 150 }}
+          >
+            <MenuItem value="count">Count</MenuItem>
+            <MenuItem value="sum">Sum</MenuItem>
+            <MenuItem value="average">Average</MenuItem>
+          </Select>
+        </FormControl>
+      </Box>
+
+      {/* main layout: columns on left (side by side), DataGrid on right, fill height */}
+      <Box sx={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        {/* left side: available + active columns side by side in a row, stacked horizontally */}
+        <Box
+          sx={{
+            minWidth: 500,
+            borderRight: 1,
+            borderColor: "grey.300",
+            p: 2,
+            overflowY: "auto",
+          }}
+        >
+          <DndContext
+            sensors={[sensor]}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext
+              items={columns.map((c) => c.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <Box sx={{ display: "flex", gap: 2 }}>
+                <ColumnList
+                  title="Available Columns"
+                  items={columns.filter((c) => c.container === "available")}
+                />
+                <ColumnList
+                  title="Active Columns"
+                  items={columns.filter((c) => c.container === "active")}
+                />
+              </Box>
+            </SortableContext>
+          </DndContext>
+        </Box>
+
+        {/* right side: DataGrid, fill space, full height */}
+        <Box sx={{ flex: 1, overflow: "auto", p: 2 }}>
+          <Paper
+            sx={{
+              width: "100%",
+              height: "100%",
+              overflow: "hidden",
+              borderRadius: 1,
+              boxShadow: 2,
+            }}
+          >
+            <DataGrid
+              rows={tableData}
+              columns={dataGridColumns}
+              pageSize={10}
+              // ---------------------------------
+              // Enable built-in filter toolbar
+              // ---------------------------------
+              filterMode="client"
+              components={{
+                Toolbar: GridToolbar,
+              }}
+              componentsProps={{
+                toolbar: {
+                  showQuickFilter: true, // optional: show search field
+                  showColumnSelector: false,
+                },
+              }}
+            />
+          </Paper>
+        </Box>
+      </Box>
+    </Box>
+  );
+};
+
+export default PivotTable;
